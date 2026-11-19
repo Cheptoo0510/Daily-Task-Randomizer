@@ -1,14 +1,13 @@
 
-import random
 import mysql.connector
-from datetime import date, timedelta
+import random
+from datetime import date
 
-# ==========================================
-# DATABASE CONNECTION
-# ==========================================
 
-try:
-    connection = mysql.connector.connect(
+# ---------------- DATABASE CONNECTION ----------------
+
+def connect_db():
+    return mysql.connector.connect(
         host="localhost",
         user="root",
         password="",
@@ -16,280 +15,260 @@ try:
         port=3306
     )
 
-    cursor = connection.cursor()
 
-    print("Successfully connected to MySQL!")
+# ---------------- DISPLAY FUNCTIONS ----------------
 
-except mysql.connector.Error as error:
-    print("Database connection failed:", error)
-    raise SystemExit
+def show_pending_tasks(cursor):
+    cursor.execute("""
+        SELECT task_id, task_name, task_date
+        FROM tasks
+        WHERE status = 'pending'
+          AND task_date <= CURDATE()
+        ORDER BY task_date, task_id
+    """)
 
+    tasks = cursor.fetchall()
 
-# ==========================================
-# INITIAL SETUP
-# ==========================================
+    print("\n========== YOUR PENDING TASKS ==========")
 
-today = date.today()
-tomorrow = today + timedelta(days=1)
-
-tasks = []
-completed_tasks = []
-current_task = None
-
-
-# ==========================================
-# LOAD TODAY'S PENDING TASKS
-# ==========================================
-
-print("\n================================")
-print("     DAILY TASK RANDOMIZER")
-print("================================")
-
-print("\nToday's date:", today)
-
-# Load today's tasks and any older unfinished tasks
-cursor.execute("""
-    SELECT task_id, task_name, task_date
-    FROM tasks
-    WHERE task_date <= %s
-    AND status = 'pending'
-""", (today,))
-
-tasks = cursor.fetchall()
-
-print("\nPending tasks loaded:", len(tasks))
-
-
-# ==========================================
-# MAIN PROGRAM
-# ==========================================
-
-while True:
-
-    # Select a random task if there is no current task
-    if tasks and current_task is None:
-        current_task = random.choice(tasks)
-
-    # Display current task
-    if current_task is not None:
-
-        print("\n================================")
-        print("🎯 YOUR NEXT TASK:")
-        print(current_task[1])
-        print("================================")
-
+    if not tasks:
+        print("You have no pending tasks for today.")
     else:
-        print("\nYou have no pending tasks right now!")
+        for number, task in enumerate(tasks, start=1):
+            print(f"{number}. {task[1]} (Added for: {task[2]})")
 
-    print("\nCommands:")
-    print("done     - Complete current task")
-    print("add      - Add a task for today")
-    print("tomorrow - Schedule a task for tomorrow")
-    print("skip     - Get another random task")
-    print("history  - View completed tasks")
-    print("quit     - Exit the program")
-
-    command = input("\nYour response: ").strip().lower()
+    return [task[0] for task in tasks]
 
 
-    # ======================================
-    # COMPLETE A TASK
-    # ======================================
+def show_history(cursor):
+    cursor.execute("""
+        SELECT task_name, completed_at
+        FROM tasks
+        WHERE status = 'completed'
+        ORDER BY completed_at DESC
+    """)
 
-    if command == "done":
+    history = cursor.fetchall()
 
-        if current_task is None:
-            print("\nThere is no task to complete!")
+    print("\n========== TASK HISTORY ==========")
 
-        else:
+    if not history:
+        print("No completed tasks yet.")
+    else:
+        for task_name, completed_at in history:
+            print(f"- {task_name} | Completed: {completed_at}")
 
-            task_id = current_task[0]
+
+def show_todays_completed_tasks(cursor):
+    cursor.execute("""
+        SELECT task_name, completed_at
+        FROM tasks
+        WHERE status = 'completed'
+          AND DATE(completed_at) = CURDATE()
+        ORDER BY completed_at
+    """)
+
+    tasks = cursor.fetchall()
+
+    print("\n========== TODAY'S COMPLETED TASKS ==========")
+
+    if not tasks:
+        print("No tasks were completed today.")
+    else:
+        for number, task in enumerate(tasks, start=1):
+            print(f"{number}. {task[0]} | {task[1]}")
+
+    print(f"\nTotal completed today: {len(tasks)}")
+
+
+# ---------------- ADD TASK FUNCTION ----------------
+
+def add_task(cursor, connection):
+    task_name = input("\nEnter the task name: ").strip()
+
+    if not task_name:
+        print("Task name cannot be empty.")
+        return None
+
+    cursor.execute("""
+        INSERT INTO tasks (task_name, task_date, status)
+        VALUES (%s, %s, 'pending')
+    """, (task_name, date.today()))
+
+    connection.commit()
+
+    task_id = cursor.lastrowid
+
+    print(f"Task '{task_name}' saved successfully!")
+
+    return task_id
+
+
+# ---------------- MAIN PROGRAM ----------------
+
+def main():
+
+    connection = None
+
+    try:
+        connection = connect_db()
+        cursor = connection.cursor()
+
+        print("\n======================================")
+        print("       DAILY TASK RANDOMIZER")
+        print("======================================")
+
+        # Load previously saved pending tasks
+        active_tasks = show_pending_tasks(cursor)
+
+        # Tasks skipped during this session
+        skipped_tasks = []
+
+        # ----------------------------------
+        # WAITING FOR USER TO START
+        # ----------------------------------
+
+        print("\nYou can add more tasks before starting.")
+        print("Type START when you are ready.")
+
+        while True:
+
+            command = input("\nCommand (START / ADD / HISTORY / QUIT): ")
+            command = command.strip().upper()
+
+            if command == "START":
+                break
+
+            elif command == "ADD":
+                task_id = add_task(cursor, connection)
+
+                if task_id is not None:
+                    active_tasks.append(task_id)
+
+            elif command == "HISTORY":
+                show_history(cursor)
+
+            elif command == "QUIT":
+                print("\nYour pending tasks have been saved.")
+                print("See you next time!")
+                return
+
+            else:
+                print("Invalid command. Try START, ADD, HISTORY or QUIT.")
+
+        # ----------------------------------
+        # RANDOM TASK SESSION
+        # ----------------------------------
+
+        print("\n========== LET'S GET TO WORK! ==========")
+
+        while active_tasks:
+
+            # Randomly select a pending task
+            selected_id = random.choice(active_tasks)
 
             cursor.execute("""
-                UPDATE tasks
-                SET status = 'completed'
+                SELECT task_name
+                FROM tasks
                 WHERE task_id = %s
-            """, (task_id,))
+                  AND status = 'pending'
+            """, (selected_id,))
 
-            connection.commit()
+            result = cursor.fetchone()
 
-            completed_tasks.append(current_task[1])
+            if result is None:
+                active_tasks.remove(selected_id)
+                continue
 
-            tasks = [
-                task for task in tasks
-                if task[0] != task_id
-            ]
+            task_name = result[0]
 
-            current_task = None
+            print("\n--------------------------------------")
+            print(f"YOUR NEXT TASK: {task_name}")
+            print("--------------------------------------")
 
-            print("\n🎉 Excellent! Task completed!")
+            command = input(
+                "\nEnter DONE, SKIP, ADD, TOMORROW, HISTORY or QUIT: "
+            ).strip().upper()
 
+            if command == "DONE":
 
-    # ======================================
-    # ADD A TASK FOR TODAY
-    # ======================================
+                cursor.execute("""
+                    UPDATE tasks
+                    SET status = 'completed',
+                        completed_at = NOW()
+                    WHERE task_id = %s
+                """, (selected_id,))
 
-    elif command == "add":
+                connection.commit()
 
-        new_task = input("\nEnter your new task: ").strip()
+                active_tasks.remove(selected_id)
 
-        if new_task:
+                print("Great job! Task completed.")
 
-            cursor.execute("""
-                INSERT INTO tasks (task_name, task_date, status)
-                VALUES (%s, %s, 'pending')
-            """, (new_task, today))
+            elif command == "SKIP":
 
-            connection.commit()
+                active_tasks.remove(selected_id)
+                skipped_tasks.append(selected_id)
 
-            new_task_id = cursor.lastrowid
+                print("Task skipped. It remains pending in your database.")
 
-            tasks.append((new_task_id, new_task, today))
+            elif command == "ADD":
 
-            print("\n✅ Task saved to the database!")
+                task_id = add_task(cursor, connection)
 
-        else:
-            print("\nNo task was entered.")
+                if task_id is not None:
+                    active_tasks.append(task_id)
 
+            elif command == "TOMORROW":
 
-    # ======================================
-    # SCHEDULE A TASK FOR TOMORROW
-    # ======================================
+                cursor.execute("""
+                    UPDATE tasks
+                    SET task_date = DATE_ADD(CURDATE(), INTERVAL 1 DAY)
+                    WHERE task_id = %s
+                """, (selected_id,))
 
-    elif command == "tomorrow":
+                connection.commit()
 
-        new_task = input("\nEnter tomorrow's task: ").strip()
+                active_tasks.remove(selected_id)
 
-        if new_task:
+                print("Task postponed until tomorrow.")
 
-            cursor.execute("""
-                INSERT INTO tasks (task_name, task_date, status)
-                VALUES (%s, %s, 'pending')
-            """, (new_task, tomorrow))
+            elif command == "HISTORY":
 
-            connection.commit()
+                show_history(cursor)
 
-            print("\n✅ Task successfully scheduled for tomorrow!")
-            print("Scheduled date:", tomorrow)
+            elif command == "QUIT":
 
-        else:
-            print("\nNo task was entered.")
+                print("\nSession ended.")
+                print("Your unfinished tasks remain saved as pending.")
+                return
 
+            else:
+                print("Invalid command. Please try again.")
 
-    # ======================================
-    # SKIP CURRENT TASK
-    # ======================================
+        # ----------------------------------
+        # SESSION SUMMARY
+        # ----------------------------------
 
-    elif command == "skip":
+        print("\n========== SESSION FINISHED ==========")
 
-        if current_task is None:
-            print("\nThere is no task to skip!")
+        if skipped_tasks:
+            print(f"You skipped {len(skipped_tasks)} task(s).")
+            print("They are still pending and will appear next time.")
 
-        elif len(tasks) == 1:
-            print("\nOnly one unfinished task remains!")
-            print("You'll have to tackle this one! 💪")
+        print("There are no more active tasks for this session.")
 
-        else:
+        # Display all tasks completed today
+        show_todays_completed_tasks(cursor)
 
-            other_tasks = [
-                task for task in tasks
-                if task[0] != current_task[0]
-            ]
+    except mysql.connector.Error as error:
+        print("\nDatabase error:", error)
 
-            current_task = random.choice(other_tasks)
+    finally:
+        if connection is not None and connection.is_connected():
+            connection.close()
+            print("\nDatabase connection closed.")
 
-            print("\nNo problem! Here's another task.")
 
-
-    # ======================================
-    # VIEW COMPLETED TASK HISTORY
-    # ======================================
-
-    elif command == "history":
-
-        cursor.execute("""
-            SELECT task_name, task_date
-            FROM tasks
-            WHERE status = 'completed'
-            ORDER BY task_date DESC, task_id DESC
-        """)
-
-        history = cursor.fetchall()
-
-        print("\n================================")
-        print("       COMPLETED TASK HISTORY")
-        print("================================")
-
-        if history:
-
-            for number, task in enumerate(history, start=1):
-                print(f"{number}. {task[0]} (Date: {task[1]})")
-
-            print("\nTotal completed tasks:", len(history))
-
-        else:
-            print("\nNo completed tasks found yet.")
-
-
-    # ======================================
-    # QUIT PROGRAM
-    # ======================================
-
-    elif command == "quit":
-
-        print("\n⏸️ You have exited the program.")
-
-        break
-
-
-    # ======================================
-    # INVALID COMMAND
-    # ======================================
-
-    else:
-
-        print("\nInvalid command!")
-        print("Please enter a valid command.")
-
-
-# ==========================================
-# SESSION SUMMARY
-# ==========================================
-
-print("\n================================")
-print("          SESSION SUMMARY")
-print("================================")
-
-print("\nTasks completed this session:")
-
-if completed_tasks:
-
-    for number, task in enumerate(completed_tasks, start=1):
-        print(f"{number}. {task}")
-
-else:
-    print("No tasks completed this session.")
-
-print("\nTotal completed this session:", len(completed_tasks))
-
-print("\nRemaining pending tasks:")
-
-if tasks:
-
-    for task in tasks:
-        print("-", task[1])
-
-else:
-    print("No pending tasks for today!")
-
-print("\nKeep going! You've got this. 💪")
-
-
-# ==========================================
-# CLOSE DATABASE CONNECTION
-# ==========================================
-
-cursor.close()
-connection.close()
-
-print("\nDatabase connection closed successfully.")
+if __name__ == "__main__":
+    main()
