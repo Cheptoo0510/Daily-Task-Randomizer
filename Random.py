@@ -35,7 +35,7 @@ def show_pending_tasks(cursor):
         print("You have no pending tasks for today.")
     else:
         for number, task in enumerate(tasks, start=1):
-            print(f"{number}. {task[1]} (Added for: {task[2]})")
+            print(f"{number}. ID: {task[0]} | {task[1]} (Date: {task[2]})")
 
     return [task[0] for task in tasks]
 
@@ -104,11 +104,81 @@ def add_task(cursor, connection):
     return task_id
 
 
+# ---------------- DELETE TASK FUNCTIONS ----------------
+
+def delete_task(cursor, connection, task_id):
+    cursor.execute("""
+        DELETE FROM tasks
+        WHERE task_id = %s
+          AND status = 'pending'
+    """, (task_id,))
+
+    connection.commit()
+
+    return cursor.rowcount > 0
+
+
+def delete_task_prompt(cursor, connection, active_tasks, skipped_tasks):
+
+    cursor.execute("""
+        SELECT task_id, task_name, task_date
+        FROM tasks
+        WHERE status = 'pending'
+        ORDER BY task_date, task_id
+    """)
+
+    tasks = cursor.fetchall()
+
+    if not tasks:
+        print("\nThere are no pending tasks to delete.")
+        return
+
+    print("\n========== DELETE A TASK ==========")
+
+    for task_id, task_name, task_date in tasks:
+        print(f"ID: {task_id} | {task_name} | Date: {task_date}")
+
+    try:
+        task_id = int(input("\nEnter the ID of the task to delete: "))
+    except ValueError:
+        print("Please enter a valid task ID.")
+        return
+
+    existing_ids = [task[0] for task in tasks]
+
+    if task_id not in existing_ids:
+        print("Task ID not found.")
+        return
+
+    confirmation = input(
+        "Are you sure you want to delete this task? (YES/NO): "
+    ).strip().upper()
+
+    if confirmation == "YES":
+
+        if delete_task(cursor, connection, task_id):
+
+            if task_id in active_tasks:
+                active_tasks.remove(task_id)
+
+            if task_id in skipped_tasks:
+                skipped_tasks.remove(task_id)
+
+            print("Task deleted successfully!")
+
+        else:
+            print("Could not delete the task.")
+
+    else:
+        print("Deletion cancelled.")
+
+
 # ---------------- MAIN PROGRAM ----------------
 
 def main():
 
     connection = None
+    cursor = None
 
     try:
         connection = connect_db()
@@ -128,33 +198,43 @@ def main():
         # WAITING FOR USER TO START
         # ----------------------------------
 
-        print("\nYou can add more tasks before starting.")
+        print("\nYou can add, delete or view tasks before starting.")
         print("Type START when you are ready.")
 
         while True:
 
-            command = input("\nCommand (START / ADD / HISTORY / QUIT): ")
-            command = command.strip().upper()
+            command = input(
+                "\nCommand (START / ADD / DELETE / HISTORY / QUIT): "
+            ).strip().upper()
 
             if command == "START":
                 break
 
             elif command == "ADD":
+
                 task_id = add_task(cursor, connection)
 
                 if task_id is not None:
                     active_tasks.append(task_id)
 
+            elif command == "DELETE":
+
+                delete_task_prompt(
+                    cursor, connection, active_tasks, skipped_tasks
+                )
+
             elif command == "HISTORY":
+
                 show_history(cursor)
 
             elif command == "QUIT":
+
                 print("\nYour pending tasks have been saved.")
                 print("See you next time!")
                 return
 
             else:
-                print("Invalid command. Try START, ADD, HISTORY or QUIT.")
+                print("Invalid command. Try START, ADD, DELETE, HISTORY or QUIT.")
 
         # ----------------------------------
         # RANDOM TASK SESSION
@@ -164,7 +244,7 @@ def main():
 
         while active_tasks:
 
-            # Randomly select a pending task
+            # Randomly select a task
             selected_id = random.choice(active_tasks)
 
             cursor.execute("""
@@ -187,7 +267,7 @@ def main():
             print("--------------------------------------")
 
             command = input(
-                "\nEnter DONE, SKIP, ADD, TOMORROW, HISTORY or QUIT: "
+                "\nEnter DONE, SKIP, ADD, DELETE, TOMORROW, HISTORY or QUIT: "
             ).strip().upper()
 
             if command == "DONE":
@@ -218,6 +298,12 @@ def main():
 
                 if task_id is not None:
                     active_tasks.append(task_id)
+
+            elif command == "DELETE":
+
+                delete_task_prompt(
+                    cursor, connection, active_tasks, skipped_tasks
+                )
 
             elif command == "TOMORROW":
 
@@ -258,13 +344,17 @@ def main():
 
         print("There are no more active tasks for this session.")
 
-        # Display all tasks completed today
+        # Display today's completed tasks
         show_todays_completed_tasks(cursor)
 
     except mysql.connector.Error as error:
         print("\nDatabase error:", error)
 
     finally:
+
+        if cursor is not None:
+            cursor.close()
+
         if connection is not None and connection.is_connected():
             connection.close()
             print("\nDatabase connection closed.")
